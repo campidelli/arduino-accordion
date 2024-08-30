@@ -12,22 +12,20 @@ const int LATCH_PIN = 18;
 const int COLS = 4;
 const int ROWS = 2;
 
-// Row and column pins
-const int rowPins[ROWS] = {12, 14};
-
-// Array to keep track of button states
-extern bool buttonStates[ROWS][COLS];
-
 class Keyboard {
 public:
     Keyboard();
-    void begin();
     void update();
     void onKeyPress(void (*callback)(int key));
     void onKeyRelease(void (*callback)(int key));
     int getTotalKeys();
+
 private:
     void setColumn(int col);
+    
+    const int rowPins[ROWS] = {12, 14};      // Row and column pins
+    bool buttonStates[ROWS][COLS] = {false}; // Array to keep track of button states
+
     void (*keyPressCallback)(int key);
     void (*keyReleaseCallback)(int key);
 };
