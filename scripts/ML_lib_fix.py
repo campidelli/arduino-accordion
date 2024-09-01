@@ -9,7 +9,7 @@ base_path = os.path.join(env.subst("$PROJECT_DIR"), ".pio/libdeps/esp32dev/ML_Sy
 # Walk through all subdirectories and files
 for root, dirs, files in os.walk(base_path):
     for file_name in files:
-        if file_name.endswith(".a"):
+        if file_name.endswith(".a") and not file_name.startswith("lib"):
             # Construct full paths for the source and destination
             source_path = os.path.join(root, file_name)
             destination_path = os.path.join(root, "lib" + file_name)

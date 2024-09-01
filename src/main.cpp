@@ -5,9 +5,15 @@
 #include "status_module.h"
 #include "Keyboard.h"
 
+/* include function declarations from ML_SynthTools */
 #define ML_SYNTH_INLINE_DECLARATION
 #include <ml_inline.h>
 #undef ML_SYNTH_INLINE_DECLARATION
+
+/* include the inline definitions from ML_SynthTools */
+#define ML_SYNTH_INLINE_DEFINITION
+#include <ml_inline.h>
+#undef ML_SYNTH_INLINE_DEFINITION
 
 ML_EPiano myRhodes;
 ML_EPiano *rhodes = &myRhodes;
@@ -112,7 +118,6 @@ void loop() {
     Audio_Output(left, right);
 
 /*
-
     Do I need this? I am sending audio to my I2S DAC
 
     int32_t mono[SAMPLE_BUFFER_SIZE];
