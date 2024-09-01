@@ -1,10 +1,13 @@
 #include "config.h"
+
 #include <Arduino.h>
 #include <ml_epiano.h>
-#include <ml_inline.h>
-
 #include "status_module.h"
 #include "Keyboard.h"
+
+#define ML_SYNTH_INLINE_DECLARATION
+#include <ml_inline.h>
+#undef ML_SYNTH_INLINE_DECLARATION
 
 ML_EPiano myRhodes;
 ML_EPiano *rhodes = &myRhodes;

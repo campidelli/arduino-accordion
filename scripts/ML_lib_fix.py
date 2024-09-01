@@ -1,31 +1,24 @@
-import shutil
 import os
 Import("env")
 
 print("Running ML fix action")
 
-# List of directories to process
-directories = ["esp32s3", "esp32s2", "esp32c3", "esp32"]
+# Define the base path to check all subdirectories
+base_path = os.path.join(env.subst("$PROJECT_DIR"), ".pio/libdeps/esp32dev/ML_SynthTools/src/")
 
-# Loop through each directory
-for dir_name in directories:
-    print(f"Processing directory: {dir_name}")
-    
-    # Get path to the ML library which is located in lib
-    ml_lib_path = os.path.join(env.subst("$PROJECT_DIR"), f".pio/libdeps/{dir_name}/ML_SynthTools/src/{dir_name}/")
-    ml_lib_name = "ML_SynthTools.a"
-    ml_lib_name_new = "lib" + ml_lib_name
-    
-    # Construct full paths for the source and destination
-    source_path = os.path.join(ml_lib_path, ml_lib_name)
-    destination_path = os.path.join(ml_lib_path, ml_lib_name_new)
-    print(f"Copying library file from: {source_path} to: {destination_path}")
-    
-    if os.path.exists(source_path):
-        # Copy the library file to the correct location and rename it with lib prefix
-        shutil.copy(source_path, destination_path)
-        print(f"File copied and renamed successfully for directory: {dir_name}")
-    else:
-        print(f"Source file does not exist for directory: {dir_name}")
+# Walk through all subdirectories and files
+for root, dirs, files in os.walk(base_path):
+    for file_name in files:
+        if file_name.endswith(".a"):
+            # Construct full paths for the source and destination
+            source_path = os.path.join(root, file_name)
+            destination_path = os.path.join(root, "lib" + file_name)
+            
+            # Print status
+            print(f"Renaming file from: {source_path} to: {destination_path}")
+            
+            # Rename the file with "lib" prefix
+            os.rename(source_path, destination_path)
+            print(f"File renamed successfully: {destination_path}")
 
 print("ML fix action completed")
