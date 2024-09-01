@@ -1,71 +1,121 @@
+#include "config.h"
 #include <Arduino.h>
+#include <ml_epiano.h>
+#include <ml_inline.h>
+
+#include "status_module.h"
 #include "Keyboard.h"
-#include "AudioTools.h"
-#include "StkAll.h"
 
-// Define constants
-const float AMPLITUDE = 64.0;
-const int GROUP = 0;
+ML_EPiano myRhodes;
+ML_EPiano *rhodes = &myRhodes;
 
-// Create instances of the audio components
-I2SStream i2s;
-ArdStreamOut output(i2s, 1);
-Clarinet clarinet(440); // Create a clarinet instance
-Voicer voicer;
+char shortName[] = "ML_Piano";
+float mainVolume = 0.5f;
+
 Keyboard keyboard;
 
-// Define key press and release handlers
-int getNote(int key) {
-    return key + 60;
+// Core 0: This is used to add a task to core 0 */
+TaskHandle_t Core0TaskHnd;
+
+// init your stuff for core0 here
+void Core0TaskSetup() {
+    Status_Setup();
+}
+
+// put your loop stuff for core0 here
+void Core0TaskLoop() {
+    Status_Process();
+}
+
+void Core0Task(void *parameter) {
+    Core0TaskSetup();
+    while (true) {
+        Core0TaskLoop();
+        // this seems necessary to trigger the watchdog
+        delay(1);
+        yield();
+    }
+}
+
+inline void Core0TaskInit() {
+    // we need a second task for the terminal output
+    xTaskCreatePinnedToCore(Core0Task, "CoreTask0", 8000, NULL, 999, &Core0TaskHnd, 0);
+}
+
+byte getNote(int key) {
+  return key + 60; // Key 0 == C4
 }
 
 void noteOn(int key) {
-    int note = getNote(key);
-
-    Serial.print("Note ");
-    Serial.print(note);
-    Serial.print(" ON at voice ");
-    Serial.println(key);
-
-    voicer.noteOn(note, AMPLITUDE, key);
+  rhodes->NoteOn(0, getNote(key), 127);
 }
 
 void noteOff(int key) {
-    int note = getNote(key);
-
-    Serial.print("Note ");
-    Serial.print(note);
-    Serial.print(" OFF at voice ");
-    Serial.println(key);
-    voicer.noteOff(note, AMPLITUDE, key);
+  rhodes->NoteOff(0, getNote(key));
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(SERIAL_BAUDRATE);
 
-    // Initialize the keyboard
+    // Setup the keyboard
     keyboard.begin();
     keyboard.onKeyPress(noteOn);
     keyboard.onKeyRelease(noteOff);
 
-    // Add the clarinets to the voicer
-    for (int i = 0; i < keyboard.getTotalKeys(); i++) {
-        voicer.addInstrument(&clarinet, i);
-    }
+    Serial.printf("Loading data\n");
+    Serial.printf("Firmware started successfully\n");
 
-    // Configure the audio output
-    auto cfg = i2s.defaultConfig(TX_MODE);
-    cfg.bits_per_sample = 16;
-    cfg.sample_rate = Stk::sampleRate();
-    cfg.channels = 1;
-    cfg.pin_bck = 26;
-    cfg.pin_ws = 25;
-    cfg.pin_data = 22;
-    i2s.begin(cfg);
+    Serial.printf("Initialize Audio Interface\n");
+    Audio_Setup();
+
+    Serial.printf("ESP.getFreeHeap() %d\n", ESP.getFreeHeap());
+    Serial.printf("ESP.getMinFreeHeap() %d\n", ESP.getMinFreeHeap());
+    Serial.printf("ESP.getHeapSize() %d\n", ESP.getHeapSize());
+    Serial.printf("ESP.getMaxAllocHeap() %d\n", ESP.getMaxAllocHeap());
+    /* PSRAM will be fully used by the looper */
+    Serial.printf("Total PSRAM: %d\n", ESP.getPsramSize());
+    Serial.printf("Free PSRAM: %d\n", ESP.getFreePsram());
+
+    Serial.printf("Firmware started successfully\n");
 }
 
 void loop() {
-    // Update keyboard and process audio
+    static int loop_cnt_1hz = SAMPLE_BUFFER_SIZE;
+    if (loop_cnt_1hz >= SAMPLE_RATE) {
+        loop_cnt_1hz -= SAMPLE_RATE;
+    }
+    Status_Process();
+
+    // Update the keyboard
     keyboard.update();
-    output.tick(voicer.tick());
+
+    // And finally the audio stuff
+    float mono[SAMPLE_BUFFER_SIZE], left[SAMPLE_BUFFER_SIZE], right[SAMPLE_BUFFER_SIZE];
+    memset(left, 0, sizeof(left));
+    memset(right, 0, sizeof(right));
+
+    rhodes->Process(mono, SAMPLE_BUFFER_SIZE);
+    // reduce gain to avoid clipping
+    for (int n = 0; n < SAMPLE_BUFFER_SIZE; n++) {
+        mono[n] *= mainVolume;
+    }
+    // mono to left and right channel
+    for (int i = 0; i < SAMPLE_BUFFER_SIZE; i++) {
+        left[i] += mono[i];
+        right[i] += mono[i];
+    }
+
+    // Output the audio
+    Audio_Output(left, right);
+
+/*
+
+    Do I need this? I am sending audio to my I2S DAC
+
+    int32_t mono[SAMPLE_BUFFER_SIZE];
+    Organ_Process_Buf(mono, SAMPLE_BUFFER_SIZE);
+    Audio_OutputMono(mono);
+*/
+
+    Status_Process_Sample(SAMPLE_BUFFER_SIZE);
 }
