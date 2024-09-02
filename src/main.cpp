@@ -19,7 +19,7 @@ ML_EPiano myRhodes;
 ML_EPiano *rhodes = &myRhodes;
 
 char shortName[] = "ML_Piano";
-float mainVolume = 0.5f;
+float mainVolume = 0.05f;
 
 Keyboard keyboard;
 
@@ -116,14 +116,6 @@ void loop() {
 
     // Output the audio
     Audio_Output(left, right);
-
-/*
-    Do I need this? I am sending audio to my I2S DAC
-
-    int32_t mono[SAMPLE_BUFFER_SIZE];
-    Organ_Process_Buf(mono, SAMPLE_BUFFER_SIZE);
-    Audio_OutputMono(mono);
-*/
 
     Status_Process_Sample(SAMPLE_BUFFER_SIZE);
 }
