@@ -52,7 +52,7 @@ void setup() {
 }
 
 void loop() {
-  for (int i = 0; i < 512; i++) {
+  for (int i = 0; i < 1024; i++) {
     output.tick(voicer.tick());
   }
   keyboard.update();
