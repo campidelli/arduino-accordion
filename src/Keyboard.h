@@ -15,6 +15,8 @@ const int ROWS = 2;
 class Keyboard {
 public:
     Keyboard();
+
+    void init();
     void update();
     void onKeyPress(void (*callback)(int key));
     void onKeyRelease(void (*callback)(int key));

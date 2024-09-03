@@ -1,6 +1,8 @@
 #include "Keyboard.h"
 
-Keyboard::Keyboard() {
+Keyboard::Keyboard() {}
+
+void Keyboard::init() {
     // Initialize row pins as inputs with pull-up resistors
     for (int i = 0; i < ROWS; i++) {
         pinMode(rowPins[i], INPUT_PULLUP);

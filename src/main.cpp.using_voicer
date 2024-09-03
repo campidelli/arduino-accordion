@@ -1,59 +1,62 @@
 #include "MozziConfigValues.h"
+
 #define MOZZI_AUDIO_MODE   MOZZI_OUTPUT_I2S_DAC
 #define MOZZI_I2S_PIN_BCK  26
 #define MOZZI_I2S_PIN_WS   25
 #define MOZZI_I2S_PIN_DATA 22
 #define MOZZI_CONTROL_RATE 256
 
+#include <Mozzi.h>
 #include <Arduino.h>
 #include <WiFi.h>
-#include <Mozzi.h>
 #include "Esp32SynchronizationContext.h"
 #include "Keyboard.h"
-#include "Voicer.h" 
+#include "Accordion.h"
 
-// General config
-#define LED_PIN 2
+#define LED_PIN            2
 
-// Create a Voicer object
-Voicer voicer;
-
-// Create a Keyboard object
-Keyboard keyboard;
-
-// Thread-safe synchronization context
 Esp32SynchronizationContext syncContext;
 bool updateRequested = false;
 
-// Callback functions for handling key press and release events
+// Declare pointers for Keyboard and Accordion
+Keyboard keyboard;
+Accordion accordion;
+
+void ledUpdate() {
+    if (accordion.isPlaying()) {
+        digitalWrite(LED_PIN, HIGH);
+    } else {
+        digitalWrite(LED_PIN, LOW);
+    }
+}
+
 void onKeyPress(int key) {
     byte note = key + 60;
-    voicer.noteOn(note);  // Use Voicer to handle note on
-    digitalWrite(LED_PIN, HIGH);
+    accordion.noteOn(note);
 }
 
 void onKeyRelease(int key) {
-    byte note = key + 60;  // Adjust the key to match your desired note range
-    voicer.noteOff(note);  // Use Voicer to handle note off
-    if (!voicer.isPlaying()) {
-        digitalWrite(LED_PIN, LOW);
-    }
+    byte note = key + 60;
+    accordion.noteOff(note);
 }
 
 void updateControl() {
     if (!syncContext.update()) {
         Serial.println("Could not update synchronization context");
     }
-
+    
     if (updateRequested) {
-        keyboard.update();  // Use the keyboard object to update key states
-        voicer.update(); // Update all active voices
+        keyboard.update();
         updateRequested = false;
     }
+    accordion.update();
+    ledUpdate();
 }
 
 AudioOutput updateAudio() {
-    return MonoOutput::fromNBit(24, voicer.getSample());  // Use Voicer to get samples
+    float volume = 1.05f;
+    int sample = accordion.nextSample() * volume;
+    return MonoOutput::fromNBit(24, sample);
 }
 
 void updateKeyboardTask(void *state) {
@@ -63,6 +66,7 @@ void updateKeyboardTask(void *state) {
             delay(1); // Feed watchdog
             continue; // Don't do anything if the main thread is still processing the last update
         }
+        
         // Request the main thread to update keyboard states
         syncContext.send(
             [](void *state) {
@@ -76,12 +80,17 @@ void updateKeyboardTask(void *state) {
 
 void setup() {
     Serial.begin(115200);
+
     WiFi.mode(WIFI_OFF); // Disable WiFi to conserve power for audio and touch updates
 
     // LED debug
     pinMode(LED_PIN, OUTPUT);
 
+    // Initialize the Accordion object
+    accordion.init();
+    
     // Initialize the Keyboard object and set the callbacks
+    keyboard.init();
     keyboard.onKeyPress(onKeyPress);
     keyboard.onKeyRelease(onKeyRelease);
 
@@ -91,6 +100,8 @@ void setup() {
             ; // Halt
         }
     }
+    Serial.println("Synchronization context initialized.");
+
     // Create a task on the first core to asynchronously update touch states
     xTaskCreatePinnedToCore(
         updateKeyboardTask,  // Function that should be called
@@ -102,7 +113,7 @@ void setup() {
         0                   // Core
     );
 
-    startMozzi(CONTROL_RATE);
+    startMozzi(MOZZI_CONTROL_RATE);
 }
 
 void loop() {

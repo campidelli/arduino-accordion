@@ -3,40 +3,39 @@
 #define MOZZI_I2S_PIN_BCK  26
 #define MOZZI_I2S_PIN_WS   25
 #define MOZZI_I2S_PIN_DATA 22
-#define MOZZI_CONTROL_RATE 256
+#define MOZZI_CONTROL_RATE 2048
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Mozzi.h>
 #include <Oscil.h>
-#include <mozzi_midi.h>
 #include <ADSR.h>
-#include <tables/saw512_int8.h>
-#include <tables/triangle512_int8.h>
-#include <tables/sin512_int8.h>
-#include <tables/square_no_alias512_int8.h>
+#include <mozzi_midi.h>
+#include <tables/saw2048_int8.h>
+#include <tables/square_no_alias_2048_int8.h>
 #include "Esp32SynchronizationContext.h"
 #include "Keyboard.h"  // Include the new Keyboard class
 
 // General config
-#define LED_PIN          2
-#define MAX_VOICES      10
-#define OSC_TABLE_SIZE 512
+#define LED_PIN           2
+#define MAX_VOICES        10
+#define SAMPLE_RATE       SAW2048_NUM_CELLS
 
 // Envelope parameters
-unsigned int attackTime      = 22;
-unsigned int decayTime       = 500;
+unsigned int attackTime      = 50;
+unsigned int decayTime       = 200;
 unsigned int sustainDuration = 8000; // Max sustain duration, not sustain level
-unsigned int releaseTime     = 300;
+unsigned int releaseTime     = 200;
 byte attackLevel             = 96;
 byte decayLevel              = 64;
 
 // Voice structure
 struct Voice {
-    Oscil<OSC_TABLE_SIZE, AUDIO_RATE> oscillator;
+    Oscil<SAMPLE_RATE, AUDIO_RATE> osc1;
+    Oscil<SAMPLE_RATE, AUDIO_RATE> osc2;
     ADSR<CONTROL_RATE, AUDIO_RATE> envelope;
-    byte noteNumber = 0;
-    byte velocity = 0;
+    byte note;
+    long triggeredAt;
 };
 Voice voices[MAX_VOICES];
 
@@ -47,52 +46,53 @@ bool updateRequested = false;
 // Create a Keyboard object
 Keyboard keyboard;
 
-void processNoteOn(byte channel, byte note, byte velocity) {
-    if (velocity > 0) {
-        int activeVoices = 0;
-        int voiceToReplace = 0;
-        int lowestVelocity = 128;
-
-        for (unsigned int i = 0; i < MAX_VOICES; i++) {
-            if (!voices[i].envelope.playing()) {
-                voices[i].envelope.noteOff();
-                voices[i].oscillator.setFreq(mtof(float(note)));
-                voices[i].envelope.noteOn();
-                voices[i].noteNumber = note;
-                voices[i].velocity = velocity;
-                break;
-            } else {
-                activeVoices++;
-                if (lowestVelocity >= voices[i].velocity) {
-                    lowestVelocity = voices[i].velocity;
-                    voiceToReplace = i;
-                }
-            }
-        }
-
-        if (activeVoices == MAX_VOICES) {
-            voices[voiceToReplace].envelope.noteOff();
-            voices[voiceToReplace].oscillator.setFreq(mtof(float(note)));
-            voices[voiceToReplace].envelope.noteOn();
-            voices[voiceToReplace].noteNumber = note;
-            voices[voiceToReplace].velocity = velocity;
-        }
-        digitalWrite(LED_PIN, HIGH);
+// Finds a free voice. It can be either a voice not in use
+// or the oldest one if all of them are being used
+int getFreeVoice() {
+  int voiceIndex = -1;
+  long oldestTriggeredAt = millis();
+  for (int i = 0; i < MAX_VOICES; i++) {
+    if (!voices[i].envelope.playing()) {
+      return i; 
+    } else if (voices[i].triggeredAt < oldestTriggeredAt) {
+      oldestTriggeredAt = voices[i].triggeredAt;
+      voiceIndex = i;
     }
+  }
+  return voiceIndex;
 }
 
-void processNoteOff(byte channel, byte note, byte velocity) {
-    byte noActiveNotes = 0;
-    for (unsigned int i = 0; i < MAX_VOICES; i++) {
-        if (note == voices[i].noteNumber) {
-            voices[i].envelope.noteOff();
-            voices[i].noteNumber = 0;
-            voices[i].velocity = 0;
-        }
-        noActiveNotes += voices[i].noteNumber;
+void noteOn(byte note) {
+  for (int i = 0; i < MAX_VOICES; i++) {
+    if (voices[i].envelope.playing() && voices[i].note == note) {
+      // This note is already being played, ignore
+      return;
     }
+  }
+  int freeVoice = getFreeVoice();
+  float frequency = mtof(float(note));
+  voices[freeVoice].osc1.setFreq(frequency);
 
-    if (noActiveNotes == 0) {
+  float detuneFactor = pow(2.0, 10.0 / 1200.0);
+  voices[freeVoice].osc2.setFreq(frequency * detuneFactor * 2);  // 10 cents detuned + 1 octave up
+  
+  voices[freeVoice].envelope.noteOn();
+  voices[freeVoice].note = note;
+  voices[freeVoice].triggeredAt = millis();
+    
+  digitalWrite(LED_PIN, HIGH);
+}
+
+void noteOff(byte note) {
+    int activeNotes = 0;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        if (note == voices[i].note) {
+            voices[i].note = 0;
+            voices[i].envelope.noteOff();
+        }
+        activeNotes += voices[i].note;
+    }
+    if (activeNotes == 0) {
         digitalWrite(LED_PIN, LOW);
     }
 }
@@ -100,14 +100,12 @@ void processNoteOff(byte channel, byte note, byte velocity) {
 // Callback functions for handling key press and release events
 void onKeyPress(int key) {
     byte note = key + 60;  // Adjust the key to match your desired note range
-    Serial.printf("Note %d ON\n", note);
-    processNoteOn(0, note, 127);
+    noteOn(note);
 }
 
 void onKeyRelease(int key) {
     byte note = key + 60;  // Adjust the key to match your desired note range
-    Serial.printf("Note %d OFF\n", note);
-    processNoteOff(0, note, 0);
+    noteOff(note);
 }
 
 void updateControl() {
@@ -120,69 +118,25 @@ void updateControl() {
         updateRequested = false;
     }
 
-    // Update envelope for each voice
-    for (unsigned int i = 0; i < MAX_VOICES; i++) {
-        voices[i].envelope.update();
+    // Update the envelopes
+    for (int i = 0; i < MAX_VOICES; i++) {
+      voices[i].envelope.update();
     }
-}
-
-void setOscillatorWaveform(const int8_t *waveformData) {
-    // RUNS ON MAIN CORE
-    // Set the waveforms for the oscillators
-    for (unsigned int i = 0; i < MAX_VOICES; i++) {
-        voices[i].oscillator.setTable(waveformData);
-    }
-}
-
-void configureADSR() {
-    // Use values from the global variables to set the ADSR
-    for (unsigned int i = 0; i < MAX_VOICES; i++) {
-        voices[i].envelope.setTimes(attackTime, decayTime, sustainDuration, releaseTime);
-        voices[i].envelope.setADLevels(attackLevel, decayLevel);
-    }
-}
-
-void handleConfiguration() {
-    Serial.print("Octave set to ");
-    Serial.println(1);  // Example value
-
-    setOscillatorWaveform(SIN512_DATA);
-    Serial.println("Waveform set to sine");
-    setOscillatorWaveform(SQUARE_NO_ALIAS512_DATA);
-    Serial.println("Waveform set to square");
-    setOscillatorWaveform(SAW512_DATA);
-    Serial.println("Waveform set to saw");
-    setOscillatorWaveform(TRIANGLE512_DATA);
-    Serial.println("Waveform set to triangle");
-
-    Serial.print("Attack time set to ");
-    Serial.println(attackTime);
-    configureADSR();
-
-    Serial.print("Decay time set to ");
-    Serial.println(decayTime);
-    configureADSR();
-
-    Serial.print("Sustain duration set to ");
-    Serial.println(sustainDuration);
-    configureADSR();
-
-    Serial.print("Release time set to ");
-    Serial.println(releaseTime);
-    configureADSR();
-
-    // Blink the LED to indicate configuration
-    digitalWrite(LED_PIN, HIGH);
-    delay(100);
-    digitalWrite(LED_PIN, LOW);
 }
 
 AudioOutput updateAudio() {
     long outputSample = 0;
-    // Accumulate sample values from all voices
+
+    // Accumulate sample values from all playing voices
     for (int i = 0; i < MAX_VOICES; i++) {
-        outputSample += voices[i].oscillator.next() * voices[i].envelope.next();
+        if (voices[i].envelope.playing()) {
+            outputSample += (voices[i].osc1.next() + voices[i].osc2.next()) * voices[i].envelope.next();
+        }
     }
+
+    float volume = 1.05f;
+    outputSample *= volume;
+
     return MonoOutput::fromNBit(24, outputSample);
 }
 
@@ -212,14 +166,16 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
 
     // Initialize the Keyboard object and set the callbacks
+    keyboard.init();
     keyboard.onKeyPress(onKeyPress);
     keyboard.onKeyRelease(onKeyRelease);
 
     // Initialize the voices
     for (unsigned int i = 0; i < MAX_VOICES; i++) {
+        voices[i].osc1.setTable(SAW2048_DATA);
+        voices[i].osc2.setTable(SQUARE_NO_ALIAS_2048_DATA);
         voices[i].envelope.setADLevels(attackLevel, decayLevel);
         voices[i].envelope.setTimes(attackTime, decayTime, sustainDuration, releaseTime);
-        voices[i].oscillator.setTable(SAW512_DATA);
     }
 
     if (!syncContext.begin()) {
