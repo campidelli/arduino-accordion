@@ -3,41 +3,56 @@
 #define MOZZI_I2S_PIN_BCK  26
 #define MOZZI_I2S_PIN_WS   25
 #define MOZZI_I2S_PIN_DATA 22
-#define MOZZI_CONTROL_RATE 2048
+#define MOZZI_CONTROL_RATE 128
+#define MOZZI_AUDIO_RATE   32768
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Mozzi.h>
-#include <Oscil.h>
 #include <ADSR.h>
+#include <ResonantFilter.h>
+#include <Oscil.h>
+#include <tables/saw8192_int8.h>
+#include <tables/smoothsquare8192_int8.h>
 #include <mozzi_midi.h>
-#include <tables/saw2048_int8.h>
-#include <tables/square_no_alias_2048_int8.h>
 #include "Esp32SynchronizationContext.h"
 #include "Keyboard.h"  // Include the new Keyboard class
 
 // General config
 #define LED_PIN           2
 #define MAX_VOICES        10
-#define SAMPLE_RATE       SAW2048_NUM_CELLS
+#define NUM_TABLE_CELLS   8192
+#define OSCIL_1_TABLE     SMOOTHSQUARE8192_DATA
+#define OSCIL_2_TABLE     SAW8192_DATA
 
 // Envelope parameters
 unsigned int attackTime      = 50;
 unsigned int decayTime       = 200;
 unsigned int sustainDuration = 8000; // Max sustain duration, not sustain level
 unsigned int releaseTime     = 200;
-byte attackLevel             = 96;
-byte decayLevel              = 64;
+byte attackLevel             = 128;
+byte decayLevel              = 128;
+
+// General volume
+float volumeFactor           = 0.95f;
+float detuneFactor           = pow(2.0, 10 / 1200.0); // 10 cents
 
 // Voice structure
+bool mixOscillators = true;
 struct Voice {
-    Oscil<SAMPLE_RATE, AUDIO_RATE> osc1;
-    Oscil<SAMPLE_RATE, AUDIO_RATE> osc2;
-    ADSR<CONTROL_RATE, AUDIO_RATE> envelope;
+    Oscil<NUM_TABLE_CELLS, MOZZI_AUDIO_RATE> osc1;
+    Oscil<NUM_TABLE_CELLS, MOZZI_AUDIO_RATE> osc2;
+    ADSR<MOZZI_CONTROL_RATE, MOZZI_AUDIO_RATE> envelope;
     byte note;
     long triggeredAt;
 };
 Voice voices[MAX_VOICES];
+
+// Low pass filter
+bool lowPassFilterOn = false;
+ResonantFilter<LOWPASS> lowPassFilter;
+byte cutoffFrequencyLevel = 20;
+byte resonanceLevel = 200;
 
 // Thread-safe synchronization context
 Esp32SynchronizationContext syncContext;
@@ -72,9 +87,7 @@ void noteOn(byte note) {
   int freeVoice = getFreeVoice();
   float frequency = mtof(float(note));
   voices[freeVoice].osc1.setFreq(frequency);
-
-  float detuneFactor = pow(2.0, 10.0 / 1200.0);
-  voices[freeVoice].osc2.setFreq(frequency * detuneFactor * 2);  // 10 cents detuned + 1 octave up
+  voices[freeVoice].osc2.setFreq(frequency * detuneFactor * 2); // +1 octave up
   
   voices[freeVoice].envelope.noteOn();
   voices[freeVoice].note = note;
@@ -108,13 +121,34 @@ void onKeyRelease(int key) {
     noteOff(note);
 }
 
+// Only update the LPF values if the difference between the new and previous values is greater than 10%
+void updateLPF() {
+    int potValue1 = analogRead(36);
+    int potValue2 = analogRead(35);
+    
+    byte newCutoffFrequencyLevel = map(potValue1, 0, 4096, 0, 255);
+    byte newResonanceLevel = map(potValue2, 0, 4096, 0, 255);
+
+    if (abs(newCutoffFrequencyLevel - cutoffFrequencyLevel) > (cutoffFrequencyLevel * 0.3)) {
+        lowPassFilter.setCutoffFreq(newCutoffFrequencyLevel);
+        cutoffFrequencyLevel = newCutoffFrequencyLevel;
+        Serial.printf("LPF Cutoff freq: %d\n", newCutoffFrequencyLevel);
+    }
+    if (abs(newResonanceLevel - resonanceLevel) > (resonanceLevel * 0.3)) {
+        lowPassFilter.setResonance(newResonanceLevel);
+        resonanceLevel = newResonanceLevel;
+        Serial.printf("LPF resonance: %d\n", newResonanceLevel);
+    }
+}
+
 void updateControl() {
     if (!syncContext.update()) {
         Serial.println("Could not update synchronization context");
     }
 
     if (updateRequested) {
-        keyboard.update();  // Use the keyboard object to update key states
+        keyboard.update();
+        //updateLPF();
         updateRequested = false;
     }
 
@@ -130,12 +164,20 @@ AudioOutput updateAudio() {
     // Accumulate sample values from all playing voices
     for (int i = 0; i < MAX_VOICES; i++) {
         if (voices[i].envelope.playing()) {
-            outputSample += (voices[i].osc1.next() + voices[i].osc2.next()) * voices[i].envelope.next();
+            if (mixOscillators) {
+                outputSample += (voices[i].osc1.next() + voices[i].osc2.next()) * voices[i].envelope.next();
+            } else {
+                outputSample += voices[i].osc1.next() * voices[i].envelope.next();
+            }
         }
     }
 
-    float volume = 1.05f;
-    outputSample *= volume;
+    // Filter it
+    if (lowPassFilterOn) {
+        outputSample = lowPassFilter.next(outputSample);
+    }
+
+    outputSample *= volumeFactor;
 
     return MonoOutput::fromNBit(24, outputSample);
 }
@@ -172,11 +214,13 @@ void setup() {
 
     // Initialize the voices
     for (unsigned int i = 0; i < MAX_VOICES; i++) {
-        voices[i].osc1.setTable(SAW2048_DATA);
-        voices[i].osc2.setTable(SQUARE_NO_ALIAS_2048_DATA);
+        voices[i].osc1.setTable(OSCIL_1_TABLE);
+        voices[i].osc2.setTable(OSCIL_2_TABLE);
         voices[i].envelope.setADLevels(attackLevel, decayLevel);
         voices[i].envelope.setTimes(attackTime, decayTime, sustainDuration, releaseTime);
     }
+
+    lowPassFilter.setCutoffFreqAndResonance(cutoffFrequencyLevel, resonanceLevel);
 
     if (!syncContext.begin()) {
         Serial.println("Error initializing synchronization context");
