@@ -29,13 +29,15 @@ void noteOff(int key) {
     voicer.noteOff(note, AMPLITUDE, GROUP);
 }
 
+void keyboardTask(void *pvParameters) {
+    while (true) {
+        keyboard.update();
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
+
 void setup() {
     Serial.begin(115200);
-
-    // Initialize the keyboard
-    keyboard.begin();
-    keyboard.onKeyPress(noteOn);
-    keyboard.onKeyRelease(noteOff);
 
     // Add the clarinet to the voicer
     voicer.addInstrument(&clarinet, GROUP);
@@ -49,11 +51,18 @@ void setup() {
     cfg.pin_ws = 25;
     cfg.pin_data = 22;
     i2s.begin(cfg);
+
+    // Initialize the keyboard
+    keyboard.begin();
+    keyboard.onKeyPress(noteOn);
+    keyboard.onKeyRelease(noteOff);
+
+    // Pin the keyboard scan task to a core 0
+    xTaskCreatePinnedToCore(keyboardTask, "Keyboard Task", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
   for (int i = 0; i < 1024; i++) {
     output.tick(voicer.tick());
   }
-  keyboard.update();
 }
