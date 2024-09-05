@@ -20,18 +20,20 @@
 
 // General config
 #define LED_PIN           2
+#define OCTAVE            4
 #define MAX_VOICES        10
 #define NUM_TABLE_CELLS   8192
 #define OSCIL_1_TABLE     SMOOTHSQUARE8192_DATA
 #define OSCIL_2_TABLE     SAW8192_DATA
+
 
 // Envelope parameters
 unsigned int attackTime      = 50;
 unsigned int decayTime       = 200;
 unsigned int sustainDuration = 8000; // Max sustain duration, not sustain level
 unsigned int releaseTime     = 200;
-byte attackLevel             = 128;
-byte decayLevel              = 128;
+byte attackLevel             = 255;
+byte decayLevel              = 255;
 
 // General volume
 float volumeFactor           = 0.95f;
@@ -110,14 +112,17 @@ void noteOff(byte note) {
     }
 }
 
-// Callback functions for handling key press and release events
+byte getMidiNote(int key) {
+    return (12 * OCTAVE) + 12 + key;
+}
+
 void onKeyPress(int key) {
-    byte note = key + 60;  // Adjust the key to match your desired note range
+    byte note = getMidiNote(key);
     noteOn(note);
 }
 
 void onKeyRelease(int key) {
-    byte note = key + 60;  // Adjust the key to match your desired note range
+    byte note = getMidiNote(key);
     noteOff(note);
 }
 
